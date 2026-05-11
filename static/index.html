@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MNIST Digit Recognizer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #0f172a;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      color: #e2e8f0;
+      padding: 24px;
+    }
+
+    h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 4px; }
+    p.sub { color: #94a3b8; font-size: 0.9rem; margin-bottom: 28px; }
+
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      max-width: 380px;
+      width: 100%;
+    }
+
+    canvas {
+      border: 2px solid #475569;
+      border-radius: 8px;
+      cursor: crosshair;
+      touch-action: none;
+      background: #000;
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      width: 100%;
+    }
+
+    button {
+      flex: 1;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.85; }
+
+    #predictBtn { background: #3b82f6; color: white; }
+    #clearBtn   { background: #475569; color: white; }
+
+    .result-box {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 16px 20px;
+      min-height: 80px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .digit-display {
+      font-size: 3.5rem;
+      font-weight: 800;
+      color: #60a5fa;
+      line-height: 1;
+    }
+
+    .confidence {
+      font-size: 0.85rem;
+      color: #94a3b8;
+    }
+
+    .bars {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 4px;
+    }
+
+    .bar-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .bar-track {
+      width: 100%;
+      height: 40px;
+      background: #1e293b;
+      border-radius: 4px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      position: absolute;
+      bottom: 0;
+      width: 100%;
+      background: #3b82f6;
+      border-radius: 4px 4px 0 0;
+      transition: height 0.3s ease;
+    }
+
+    .bar-label {
+      font-size: 0.75rem;
+      color: #94a3b8;
+    }
+
+    .status {
+      font-size: 0.85rem;
+      color: #94a3b8;
+    }
+
+    .error { color: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>Digit Recognizer</h1>
+  <p class="sub">Draw a digit (0–9) · Model: MNIST CNN · Accuracy: 99%+</p>
+
+  <div class="card">
+    <canvas id="canvas" width="280" height="280"></canvas>
+
+    <div class="controls">
+      <button id="predictBtn" onclick="predict()">Predict</button>
+      <button id="clearBtn" onclick="clearCanvas()">Clear</button>
+    </div>
+
+    <div class="result-box" id="result">
+      <span class="status">Draw a digit above, then click Predict</span>
+    </div>
+
+    <div class="bars" id="bars"></div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let drawing = false;
+
+    // Drawing setup
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 18;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Mouse events
+    canvas.addEventListener('mousedown',  e => { drawing = true; ctx.beginPath(); moveTo(e); });
+    canvas.addEventListener('mousemove',  e => { if (!drawing) return; lineTo(e); });
+    canvas.addEventListener('mouseup',    () => drawing = false);
+    canvas.addEventListener('mouseleave', () => drawing = false);
+
+    // Touch events
+    canvas.addEventListener('touchstart',  e => { e.preventDefault(); drawing = true; ctx.beginPath(); moveTo(e.touches[0]); });
+    canvas.addEventListener('touchmove',   e => { e.preventDefault(); if (!drawing) return; lineTo(e.touches[0]); });
+    canvas.addEventListener('touchend',    () => drawing = false);
+
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
+    function moveTo(e) { const p = getPos(e); ctx.moveTo(p.x, p.y); }
+    function lineTo(e)  { const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); }
+
+    function clearCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      document.getElementById('result').innerHTML = '<span class="status">Draw a digit above, then click Predict</span>';
+      document.getElementById('bars').innerHTML = '';
+    }
+
+    async function predict() {
+      // Export canvas as 28×28 grayscale PNG
+      const offscreen = document.createElement('canvas');
+      offscreen.width = 28; offscreen.height = 28;
+      const oc = offscreen.getContext('2d');
+      oc.drawImage(canvas, 0, 0, 28, 28);
+
+      // Convert to base64
+      const dataURL = offscreen.toDataURL('image/png');
+      const base64 = dataURL.split(',')[1];
+
+      document.getElementById('result').innerHTML = '<span class="status">Predicting...</span>';
+
+      try {
+        const res = await fetch('/predict', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: base64 })
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || 'API error');
+        }
+
+        const data = await res.json();
+        showResult(data);
+      } catch (err) {
+        document.getElementById('result').innerHTML =
+          `<span class="error">Error: ${err.message}</span>`;
+      }
+    }
+
+    function showResult(data) {
+      const pct = (data.confidence * 100).toFixed(2);
+      document.getElementById('result').innerHTML = `
+        <div class="digit-display">${data.digit}</div>
+        <div class="confidence">Confidence: ${pct}%</div>
+      `;
+
+      // Probability bars
+      const barsEl = document.getElementById('bars');
+      barsEl.innerHTML = data.probabilities.map((p, i) => `
+        <div class="bar-item">
+          <div class="bar-track">
+            <div class="bar-fill" style="height:${p*100}%; background:${i===data.digit?'#60a5fa':'#334155'}"></div>
+          </div>
+          <span class="bar-label">${i}</span>
+        </div>
+      `).join('');
+    }
+  </script>
+</body>
+</html>
